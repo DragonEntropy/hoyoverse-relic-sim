@@ -191,7 +191,7 @@ class ZZZ(Game):
     ]
 
 
-game_classes = {
+GAME_CLASSES = {
     "genshin": Genshin,
     "hsr": HSR,
     "zzz": ZZZ

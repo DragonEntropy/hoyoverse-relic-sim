@@ -13,18 +13,18 @@ class Condition(Enum):
 
 class StatGoal:
     def __init__(self, stats: list[str], condition: Condition, threshold: int = 0):
-        self.stats = stats
-        self.condition = condition
+        self.stats = [stats] if isinstance(stats, str) else list(stats)
+        self.condition = Condition[condition.upper()] if isinstance(condition, str) else condition
         self.threshold = threshold
 
     def is_met(self, relic: Relic):
         if self.condition == Condition.MAIN:
             return relic.main_stat in self.stats
         elif self.condition == Condition.SUM:
-            return sum(relic.sub_stats) >= self.threshold
+            return sum(relic.sub_stats_values.get(stat, 0) for stat in self.stats) >= self.threshold
         elif self.condition == Condition.ALL:
-            return all(value >= self.threshold for value in relic.sub_stats)
+            return bool(self.stats) and all(relic.sub_stats_values.get(stat, 0) >= self.threshold for stat in self.stats)
         elif self.condition == Condition.ANY:
-            return any(value >= self.threshold for value in relic.sub_stats)
+            return any(relic.sub_stats_values.get(stat, 0) >= self.threshold for stat in self.stats)
         else:
             raise ValueError(f"Unknown condition: {self.condition}")

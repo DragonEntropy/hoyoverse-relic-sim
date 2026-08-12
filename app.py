@@ -1,129 +1,148 @@
-import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
+import streamlit as st
 
-from core.rates import Genshin, HSR, ZZZ, GAME_CLASSES
 from core.constants import STAT_ABBREVS
-from simulation import simulate
-from core.stat_goal import StatGoal, Condition
-
-# ======================================================
-# Replace these imports with your project modules
-# ======================================================
-# from relic import Relic
-# from stat_goal import StatGoal
-# from simulate import simulate
-
-games = ["genshin", "hsr", "zzz"]
-
-st.set_page_config(
-    page_title="Hoyoverse Artifact Odds Calculator",
-    page_icon="🎲",
-    layout="wide"
-)
+from core.rates import GAME_CLASSES
+from core.stat_goal import Condition, StatGoal
+from simulation import farm, farm_until_targets
 
 
-st.title("🎲 Hoyoverse Artifact / Relic Odds Calculator")
+st.set_page_config(page_title="Hoyoverse Artifact Odds Calculator", page_icon="D", layout="wide")
+st.title("Hoyoverse Artifact / Relic Odds Calculator")
 
 with st.sidebar:
     st.header("Simulation")
-    game = st.selectbox("Game", list(games))
-    mode = st.radio("Mode", ["Farm until complete", "Best after N drops"])
-    mc_runs = st.number_input("Monte Carlo repetitions", 100, 1000000, 10000, 100)
-    target = st.number_input("Target successes", 1, 100000, 1000)
-    drops = st.number_input("Drops (Best after N)", 1, 1000000, 10000)
+    game = st.selectbox("Game", list(GAME_CLASSES))
+    mode = st.radio("Mode", ["Farm one slot", "Farm all slots"])
 
-game_class = game_classes[game]
-piece_count = game_class.total_slots
-subs = game_class.sub_weights.keys()
+game_class = GAME_CLASSES[game]
 
-stat_goals = []
 
-st.header("Build Configuration")
-
-for i in range(piece_count):
-    with st.expander(str(i), expanded=False):
-
-        # Add main stat condition
-        mains = game_class.main_weights[i]
-        main = st.selectbox(
-            "Main Stat",
-            map(lambda stat: STAT_ABBREVS[stat], mains),
-            key=f"{i}_main"
-        )
-        stat_goals.append(StatGoal(main, Condition.MAIN))
-
-        # Add sub stats condition
-        subs = st.multiselect(
-            "Desired Substats",
-            map(lambda stat: STAT_ABBREVS[stat], subs),
-            key=f"{i}_subs"
-        )
-
-        condition = st.selectbox(
-            "Condition",
-            ["sum", "all", "any"],
-            key=f"{i}_cond"
-        )
-
-        threshold = st.number_input(
-            "Threshold",
-            1,
-            20,
-            7,
-            key=f"{i}_thresh"
-        )
-
-        enabled = st.checkbox(
-            "Include Piece",
-            True,
-            key=f"{i}_enabled"
-        )
-
-        stat_goals.append(StatGoal(subs, condition, threshold))
-
-run = st.button("Run Simulation", type="primary")
-print(stat_goals)
-
-if run:
-    progress = st.progress(0)
-    status = st.empty()
-
-    success_rate = simulate(game, stat_goals, target)
-
-    st.success("Simulation complete")
-    st.metric(
-        "Success Rate",
-        f"{success_rate:.4%}"
+def requirement_inputs(slot: int, prefix: str) -> list[StatGoal]:
+    """Render one slot's criteria and return its corresponding goals."""
+    main_stats = list(game_class.main_weights[slot - 1])
+    selected_mains = st.multiselect(
+        "Accepted main stats",
+        main_stats,
+        format_func=lambda stat: STAT_ABBREVS.get(stat, stat),
+        key=f"{prefix}_mains",
+        help="Leave empty to accept any main stat.",
     )
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Success Rate", f"{success_rate:.3%}")
-    # c2.metric("Average Trials", f"{avg_trials:,}")
-    # c3.metric("Median Trials", f"{median:,}")
+    substats = st.multiselect(
+        "Desired substats",
+        list(game_class.sub_weights),
+        format_func=lambda stat: STAT_ABBREVS.get(stat, stat),
+        key=f"{prefix}_substats",
+    )
 
-    st.subheader("Piece Configuration")
+    goals = []
+    if selected_mains:
+        goals.append(StatGoal(selected_mains, Condition.MAIN))
+    if substats:
+        condition_name = st.selectbox("Substat condition", ["Sum", "All", "Any"], key=f"{prefix}_condition")
+        maximum_rolls = 6 // len(substats) if condition_name == "All" else 6
+        threshold = st.number_input(
+            "Minimum rolls",
+            min_value=1,
+            max_value=maximum_rolls,
+            value=min(4, maximum_rolls),
+            key=f"{prefix}_threshold_{condition_name}_{len(substats)}",
+        )
+        goals.append(StatGoal(substats, Condition[condition_name.upper()], int(threshold)))
+    return goals
 
-    df = pd.DataFrame(stat_goals)
-    st.dataframe(df, use_container_width=True)
 
-    st.subheader("Example Distribution")
+if mode == "Farm one slot":
+    st.caption("Farm a fixed number of relics, then inspect the best drops that meet your requirements.")
+    with st.sidebar:
+        drops = st.number_input("Relics to farm", min_value=1, max_value=1_000_000, value=10_000, step=100)
+        top_k = st.number_input("Top qualifying relics to show", min_value=1, max_value=100, value=10)
 
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.hist([650, 700, 720, 740, 760, 780, 820, 900, 950, 1000], bins=8)
-    ax.set_xlabel("Trials")
-    ax.set_ylabel("Frequency")
-    st.pyplot(fig)
+    slot = st.selectbox("Slot", range(1, game_class.total_slots + 1), format_func=lambda value: f"Slot {value}")
+    st.header("Relic Requirements")
+    goals = requirement_inputs(slot, f"single_{game}_{slot}")
 
-    st.subheader("Integration")
+    if st.button("Farm relics", type="primary"):
+        progress = st.progress(0)
+        status = st.empty()
 
-    st.info("""
-Replace the placeholder simulation section with your own code.
+        def update_progress(completed: int, total: int) -> None:
+            progress.progress(completed / total)
+            status.write(f"Farming relic {completed:,} of {total:,}")
 
-Typical workflow:
+        qualifying_relics, trials = farm(game, goals, int(drops), slot=slot, progress_callback=update_progress)
+        status.empty()
+        st.success("Farming complete")
+        first, second = st.columns(2)
+        first.metric("Qualifying drop rate", f"{len(qualifying_relics) / trials:.4%}")
+        second.metric("Relics simulated", f"{trials:,}")
 
-1. Convert each config dict into your PieceGoal / StatGoal objects.
-2. Call your simulator.
-3. Update the progress bar during execution.
-4. Display the returned statistics and distributions.
-""")
+        st.subheader(f"Top {min(int(top_k), len(qualifying_relics))} qualifying relics")
+        if not qualifying_relics:
+            st.info("No relics met every requirement in this farming run.")
+        else:
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Rank": rank,
+                            "Desired rolls": score,
+                            "Main stat": STAT_ABBREVS.get(relic.main_stat, relic.main_stat),
+                            "Substats": ", ".join(
+                                f"{STAT_ABBREVS.get(stat, stat)} +{value}"
+                                for stat, value in relic.sub_stats_values.items()
+                            ),
+                        }
+                        for rank, (score, relic) in enumerate(qualifying_relics[: int(top_k)], start=1)
+                    ]
+                ),
+                hide_index=True,
+                use_container_width=True,
+            )
+else:
+    st.caption("Each trial creates one uniformly random slot. Configure its requirements, then farm until every slot has reached the same target.")
+    relic_targets = {}
+    st.header("Per-slot targets")
+    target = st.number_input("Target matching relics per slot", min_value=1, max_value=100_000, value=1)
+    columns = st.columns(3)
+    for index, slot in enumerate(range(1, game_class.total_slots + 1)):
+        prefix = f"multi_{game}_{slot}"
+        with columns[index % 3]:
+            with st.expander(f"Slot {slot}"):
+                enabled = st.checkbox("Farm this slot", value=True, key=f"{prefix}_enabled")
+                goals = requirement_inputs(slot, prefix)
+                if enabled:
+                    relic_targets[slot] = (goals, int(target))
+
+    if st.button("Farm all targets", type="primary"):
+        if not relic_targets:
+            st.error("Enable at least one slot target.")
+        else:
+            progress = st.progress(0)
+            status = st.empty()
+
+            def update_progress(trials: int, completed: int, total: int) -> None:
+                progress.progress(completed / total)
+                status.write(f"Simulated {trials:,} relics; completed {completed} of {total} slot targets")
+
+            results, total_trials = farm_until_targets(game, relic_targets, progress_callback=update_progress)
+            status.empty()
+            st.success("All slot targets met")
+            st.metric("Total relics simulated", f"{total_trials:,}")
+            st.subheader("Trials required per slot")
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Slot": slot,
+                            "Target matching relics": result["target"],
+                            "Matches found": result["matches"],
+                            "Trial completed": result["completed_at_trial"],
+                        }
+                        for slot, result in results.items()
+                    ]
+                ),
+                hide_index=True,
+                use_container_width=True,
+            )
