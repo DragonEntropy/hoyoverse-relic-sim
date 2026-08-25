@@ -4,7 +4,7 @@ import streamlit as st
 from core.constants import STAT_ABBREVS
 from core.rates import GAME_CLASSES
 from core.stat_goal import Condition, StatGoal
-from simulation import farm, farm_until_targets
+from core.simulation import farm, farm_until_targets
 
 
 st.set_page_config(page_title="Hoyoverse Artifact Odds Calculator", page_icon="D", layout="wide")
