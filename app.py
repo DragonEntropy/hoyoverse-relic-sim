@@ -18,11 +18,13 @@ with st.sidebar:
 game_class = GAME_CLASSES[game]
 
 
-def requirement_inputs(slot: int, prefix: str) -> list[StatGoal]:
+def requirement_inputs(
+    slot: int, prefix: str, *, include_fixed_stats: bool = False
+) -> tuple[list[StatGoal], str | None, list[str]]:
     """Render one slot's criteria and return its corresponding goals."""
     main_stats = list(game_class.main_weights[slot - 1])
     selected_mains = st.multiselect(
-        "Accepted main stats",
+        "Target main stats",
         main_stats,
         format_func=lambda stat: STAT_ABBREVS.get(stat, stat),
         key=f"{prefix}_mains",
@@ -30,11 +32,29 @@ def requirement_inputs(slot: int, prefix: str) -> list[StatGoal]:
     )
 
     substats = st.multiselect(
-        "Desired substats",
+        "Target substats",
         list(game_class.sub_weights),
         format_func=lambda stat: STAT_ABBREVS.get(stat, stat),
         key=f"{prefix}_substats",
     )
+
+    fixed_main = None
+    fixed_substats: list[str] = []
+    if include_fixed_stats:
+        fixed_main = st.selectbox(
+            "Fixed main stat",
+            [None, *main_stats],
+            format_func=lambda stat: "None" if stat is None else STAT_ABBREVS.get(stat, stat),
+            key=f"{prefix}_fixed_main",
+            help="Generate every simulated relic with this main stat.",
+        )
+        fixed_substats = st.multiselect(
+            "Fixed substats",
+            list(game_class.sub_weights),
+            format_func=lambda stat: STAT_ABBREVS.get(stat, stat),
+            key=f"{prefix}_fixed_substats",
+            help="Generate every simulated relic with these substats.",
+        )
 
     goals = []
     if selected_mains:
@@ -50,7 +70,7 @@ def requirement_inputs(slot: int, prefix: str) -> list[StatGoal]:
             key=f"{prefix}_threshold_{condition_name}_{len(substats)}",
         )
         goals.append(StatGoal(substats, Condition[condition_name.upper()], int(threshold)))
-    return goals
+    return goals, fixed_main, fixed_substats
 
 
 if mode == "Farm one slot":
@@ -61,7 +81,9 @@ if mode == "Farm one slot":
 
     slot = st.selectbox("Slot", range(1, game_class.total_slots + 1), format_func=lambda value: f"Slot {value}")
     st.header("Relic Requirements")
-    goals = requirement_inputs(slot, f"single_{game}_{slot}")
+    goals, fixed_main, fixed_substats = requirement_inputs(
+        slot, f"single_{game}_{slot}", include_fixed_stats=True
+    )
 
     if st.button("Farm relics", type="primary"):
         progress = st.progress(0)
@@ -71,7 +93,15 @@ if mode == "Farm one slot":
             progress.progress(completed / total)
             status.write(f"Farming relic {completed:,} of {total:,}")
 
-        qualifying_relics, trials = farm(game, goals, int(drops), slot=slot, progress_callback=update_progress)
+        qualifying_relics, trials = farm(
+            game,
+            goals,
+            int(drops),
+            slot=slot,
+            fixed_main_stat=fixed_main,
+            fixed_substats=fixed_substats,
+            progress_callback=update_progress,
+        )
         status.empty()
         st.success("Farming complete")
         first, second = st.columns(2)
@@ -111,7 +141,7 @@ else:
         with columns[index % 3]:
             with st.expander(f"Slot {slot}"):
                 enabled = st.checkbox("Farm this slot", value=True, key=f"{prefix}_enabled")
-                goals = requirement_inputs(slot, prefix)
+                goals, _, _ = requirement_inputs(slot, prefix)
                 if enabled:
                     relic_targets[slot] = (goals, int(target))
 

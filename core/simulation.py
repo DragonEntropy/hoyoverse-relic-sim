@@ -10,6 +10,8 @@ def farm(
     drops: int,
     *,
     slot: int = 0,
+    fixed_main_stat: str | None = None,
+    fixed_substats: Sequence[str] = (),
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> tuple[list[tuple[int, Relic]], int]:
     """Farm a fixed number of relics and return qualifying drops, best first."""
@@ -24,7 +26,13 @@ def farm(
         for stat in goal.stats
     }
     for trial in range(1, drops + 1):
-        relic = Relic(game=game, slot=slot, upgrade_count=5)
+        relic = Relic(
+            game=game,
+            slot=slot,
+            upgrade_count=5,
+            fixed_main_stat=fixed_main_stat,
+            fixed_substats=fixed_substats,
+        )
         if all(goal.is_met(relic) for goal in stat_goals):
             score = sum(relic.sub_stats_values.get(stat, 0) for stat in desired_stats)
             qualifying_relics.append((score, relic))
